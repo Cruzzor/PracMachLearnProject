@@ -1,0 +1,100 @@
+---
+title: "Analysation and building a machine learning model for the pml-training dataset"
+author: "MB"
+date: "30. Januar 2016"
+output: html_document
+---
+
+# Summary
+In this report, we're firstly going to analyse the pml-training dataset (http://groupware.les.inf.puc-rio.br/har) and build a machine learning model, with which we're going to predict a set of test data in order to answer the according Practical Machine Learning quiz.
+
+# Data Exploration and Cleaning
+First, we're going to load some libraries that we're going to need throughout this report:
+```{r, message = FALSE, cache = TRUE}
+library(caret)
+library(dplyr)
+library(doParallel)
+```
+
+We're now going to load the data and have a look at the summary for all the variables:
+```{r, cache = TRUE}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", stringsAsFactors = FALSE)
+str(training)
+```
+
+As we can see, there are a lot of variables that either have mostly no values or the value _NA_. We are going to clean the dataset by removing all these variables, since they won't contribute to the learning model. In fact, later we will see that the testing dataset does not provide any data for these variables. 
+```{r, cache = TRUE}
+## Removing all variables with only _NA_ values
+training_nona<-training[,colSums(is.na(training)) == 0]
+
+## Removing variables that have little to no values
+training2 <- select(training_nona, -c(12:20)) %>% select(-c(34:39, 43:51, 65:73))
+```
+
+Also, we need to do some conversions since, namely
+
+* Converting all numbers to type _numeric_
+* Converting all the remaining strings to factors
+* Removing the row counting variable _X_
+
+```{r, cache = TRUE}
+for (i in 7:59) { as.numeric(training2[, i]) }
+
+training2$user_name <- as.factor(training2$user_name)
+training2$new_window <- as.factor(training2$new_window)
+training2$classe <- as.factor(training2$classe)
+
+training2 <- training2 %>% select(-X)
+```
+
+The dataset now looks like this:
+```{r, cache = TRUE}
+str(training2)
+```
+
+# Build a machine learning model
+With the cleaned dataset we can now start to build our machine learning model. We are going to assume here that all the technical data coming from the device that tracked the movement provided will help classify the movement itself. 
+
+The outcome of the model is the variable _classe_, which we're going to predict with the remaining variables. However, since there's no dependency between the values (rows), we don't need to keep the time data in our model. They will be removed. Since we're doing a classification, we're going to take a random forest learning algorithm to train our model.
+
+Before training our model, we need to split the data in order to do some cross-validation. This is needed to evaluate the accuracy of our model on independent data that we did not use for the training:
+```{r, cache = TRUE}
+## Split data into training and cross-validation dataset
+inTrain <- createDataPartition(y = training2$classe, p = 0.8, list = FALSE)
+training <- training2[inTrain, ]
+cv <- training2[-inTrain, ]
+
+## Remove timestamp and _new_window_ variables
+training <- select(training, -c(2:6))
+```
+
+Now we can start build our model. We're going to use the _caret_ package to train the model with the random forest algorithm. Also, to speed this up we're going to do some parallel computation:
+```{r, cache = TRUE}
+set.seed(1234)
+registerDoParallel(4)
+
+fit <- train(classe ~ ., method = "rf", data = training)
+```
+
+With the fitted model we can now estimate our out-of-sample error rate by using our cross-validation set. We will predict the values of the cross-validation set and calculate the error rate by adding up the times our model predicted the wrong value and divide this summation by the total predicted values:
+```{r, cache = TRUE}
+## Predict cross-validation data
+pred_cv <- predict(fit, newdata = cv)
+
+## function to calculate the error
+oos_error <- function(prediction, actualValues) {
+  sum(prediction != actualValues) / length(actualValues)
+}
+
+## Calculate the estimates out-of-sample error rate
+oos_error(pred_cv, cv$classe)
+```
+
+As we can see, the out-of-sample error rate es actually quite low, namely below 1%. With this model, we're confident enough to predict the test data:
+```{r, cache = TRUE}
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", stringsAsFactors = FALSE)
+predict(fit, testing)
+```
+
+# Discussion
+After entering all the predicted results, we've actually got a score of 100%. This is okay for the purpose of this project, but the model can be optimized further. We've assumed that each and every of the device variables contribute useful information to the model. This should be further inspected with means like variable importance algorithms. This will help speeding up the training process and might only increase the error rate a little.
